@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.12)
+project(covid_img_parser)
+find_package(OpenCV REQUIRED)
+find_package(nlohmann_json REQUIRED)
+add_executable(img_parser src/img_parser)
+target_link_libraries(img_parser nlohmann_json::nlohmann_json ${OpenCV_LIBS})
