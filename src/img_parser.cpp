@@ -28,6 +28,17 @@ Vector2 operator*(const Vector2& a, float value) {
     return Vector2((int) (value * a.x), (int) (value * a.y));
 }
 
+void test_vector2() {
+    Vector2 a(2, 2);
+    Vector2 b(4, -4);
+    auto c = a + b;
+    auto d = a * 0.5f;
+    auto e = 1.5f * b;
+    std::cout << "c: (" << c.x << ", " << c.y << ")\n";
+    std::cout << "d: (" << d.x << ", " << d.y << ")\n";
+    std::cout << "e: (" << e.x << ", " << e.y << ")\n";
+}
+
 struct BoundingBox {
     BoundingBox(): min(1e8, 1e8), max(-1e8, -1e8) {}
     Vector2 min;
@@ -51,6 +62,9 @@ struct BoundingBox {
     }
     int height() const {
         return max.y - min.y;
+    }
+    Vector2 center() const {
+        return 0.5f * (min + max);
     }
     void grow(const Vector2& point) {
         if (point.x < min.x) min.x = point.x;
@@ -80,7 +94,7 @@ struct Paragraph {
     std::string text;
     void reset() {
         bb.reset();
-        text = "";
+        text.clear();
     }
 };
 
@@ -207,8 +221,114 @@ ParagraphGroup merge(const std::vector<ParagraphGroup>& in_groups,
     return out_group;
 }
 
+std::vector<BoundingBox> detect_vertical_lines(const std::string& image_filename) {
+    // Open the image file.
+    cv::Mat image = cv::imread(image_filename);
+
+    // Detect edges.
+    cv::Mat edge_image;
+    cv::cvtColor(image, edge_image, cv::ColorConversionCodes::COLOR_BGR2GRAY);
+    cv::blur(edge_image, edge_image, cv::Size(3, 3));
+    int low_threshold = 5;
+    int ratio = 3;
+    int kernel_size = 3;
+    cv::Canny(edge_image, edge_image, low_threshold, ratio * low_threshold, kernel_size);
+
+    // Detect vertical line pixels.
+    cv::Mat vertical_structure = cv::getStructuringElement(cv::MorphShapes::MORPH_RECT,
+        cv::Size(1, edge_image.rows / 40));
+    cv::erode(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
+    cv::dilate(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
+
+    // Merge nearby lines.
+    cv::Mat square_structure = cv::getStructuringElement(cv::MorphShapes::MORPH_RECT,
+        cv::Size(10, 10));
+    cv::dilate(edge_image, edge_image, square_structure, cv::Point(-1, -1));
+    cv::erode(edge_image, edge_image, square_structure, cv::Point(-1, -1));
+
+    // Merge vertical lines.
+    vertical_structure = cv::getStructuringElement(cv::MorphShapes::MORPH_RECT,
+        cv::Size(1, edge_image.rows / 10));
+    cv::dilate(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
+    cv::erode(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
+
+    // Label pixels of vertical lines by finding connected components.
+    cv::Mat labelled_image(edge_image.size(), CV_32S);
+    int label_count = cv::connectedComponents(edge_image, labelled_image, 8);
+    std::cout << "label_count: " << label_count << "\n";
+
+    if (label_count <= 1) {
+        // There is only one label, the background label. No line is found.
+        return {};
+    }
+
+    // Compute bounding box of the vertical lines.
+    std::vector<BoundingBox> vertical_line_bbs(label_count - 1);
+    for (int i = 0; i < labelled_image.rows; ++i) {
+        for (int j = 0; j < labelled_image.cols; ++j) {
+            auto label = labelled_image.at<int>(i, j);
+            if (label <= 0) {
+                // Skip background pixels.
+                continue;
+            }
+            vertical_line_bbs[label - 1].grow(Vector2(j, i));
+        }
+    }
+
+    // Sort the vertical lines by x.
+    std::sort(vertical_line_bbs.begin(), vertical_line_bbs.end(),
+        [](const BoundingBox& a, const BoundingBox& b) { return a.min.x < b.min.x; });
+
+    // // Draw bounding box of the vertical lines.
+    // for (auto&& bb : vertical_line_bbs) {
+    //     auto& min = bb.min;
+    //     auto& max = bb.max;
+    //     cv::rectangle(image, cv::Point(min.x, min.y), cv::Point(max.x, max.y), cv::Scalar(0, 100, 0));
+    // }
+
+    // cv::imshow("image", image);
+    // cv::waitKey(0);
+
+    return vertical_line_bbs;
+}
+
+std::vector<BoundingBox> get_y_overlapping_vertical_line_bbs(
+    const std::vector<BoundingBox>& vertical_line_bbs, const BoundingBox& bb) {
+    // Output
+    std::vector<BoundingBox> out_vertical_line_bbs;
+    for (auto&& vertical_line_bb : vertical_line_bbs) {
+        if (overlap_y(vertical_line_bb, bb)) {
+            out_vertical_line_bbs.push_back(vertical_line_bb);
+        }
+    }
+
+    return out_vertical_line_bbs;
+}
+
+/**
+ * Vertical lines form intervals. Get the index of the interval
+ * where the center of the input bounding box is located.
+ * Assume the input vertical line bounding boxes are sorted
+ * by the minimum x.
+ */
+int get_vertical_line_interval_index(const std::vector<BoundingBox>& vertical_line_bbs,
+    const BoundingBox& bb) {
+    auto bb_center = bb.center();
+    int index = 0;
+    for (int i = 0; i < vertical_line_bbs.size(); ++i) {
+        auto& vertical_line_bb = vertical_line_bbs[i];
+        if (bb_center.x < vertical_line_bb.center().x) {
+            break;
+        } else {
+            index += 1;
+        }
+    }
+    return index;
+}
+
 ParagraphGroup read_paragraphs(const nlohmann::json& vision_result,
-    const std::string& image_filename) {
+    const std::string& image_filename,
+    const std::vector<BoundingBox>& vertical_line_bbs) {
 
     cv::Mat image = cv::imread(image_filename);
     // // Draw bounding box of paragraphs.
@@ -232,6 +352,9 @@ ParagraphGroup read_paragraphs(const nlohmann::json& vision_result,
 
                 // std::string current_text;
 
+                std::vector<BoundingBox> y_overlapping_vertical_line_bbs;
+                int out_paragraph_vertical_line_interval_index = 0;
+
                 // Store the text.
                 for (auto&& word : paragraph["words"]) {
                     for (auto&& symbol : word["symbols"]) {
@@ -245,6 +368,30 @@ ParagraphGroup read_paragraphs(const nlohmann::json& vision_result,
                             symbol_bb.grow(out_vertex);
                         }
 
+                        // If the output paragraph does not contain any symbol yet,
+                        // get the vertical line bounding boxes that overlap with
+                        // the bounding box of the first symbol.
+                        // Also get the vertical line interval index of the
+                        // first symbol. All symbols in a paragraph should share
+                        // the same such index.
+                        if (out_paragraph.text.empty()) {
+                            y_overlapping_vertical_line_bbs =
+                                get_y_overlapping_vertical_line_bbs(
+                                    vertical_line_bbs, symbol_bb);
+                            out_paragraph_vertical_line_interval_index =
+                                get_vertical_line_interval_index(
+                                    y_overlapping_vertical_line_bbs,
+                                    symbol_bb);
+                        }
+
+                        // Calculate the vertical line interval index of the 
+                        // current symbol.
+                        auto symbol_vertical_line_interval_index =
+                            get_vertical_line_interval_index(y_overlapping_vertical_line_bbs,
+                                symbol_bb);
+                        // std::cout << symbol["text"] << ": "
+                        //     << symbol_vertical_line_interval_index << "\n";
+
                         // // Draw bb.
                         // {
                         //     auto& min = symbol_bb.min;
@@ -257,13 +404,19 @@ ParagraphGroup read_paragraphs(const nlohmann::json& vision_result,
                         // Shrink the bounding box to decrease the chance of overlapping.
                         // symbol_bb.shrink(0.5f);
 
-                        // Check if the symbol is located at a different line
-                        // by checking if the symbol's bounding box overlaps with
-                        // the current paragraph bounding box in y direction.
+                        // Check whether to start a new paragraph.
+                        // Condition 1: the output paragraph is not empty.
+                        // Condition 2: the symbol's bounding box does not overlap
+                        //   with the output paragraph's bounding box in the y direction.
+                        // Condition 3: the symbol's vertical line interval index
+                        //   is different from that of the output paragraph.
+                        // Total condition: "cond. 1" AND ("cond. 2" OR "cond. 3")
                         // // If on the same line, check if the current symbol is
                         // // located too right to the bounding box of the current paragraph.
-                        if (!out_paragraph.text.empty() &&
-                            !overlap_y(out_paragraph.bb, symbol_bb)) {
+                        bool condition_1 = !out_paragraph.text.empty();
+                        bool condition_2 = !overlap_y(out_paragraph.bb, symbol_bb);
+                        bool condition_3 = symbol_vertical_line_interval_index != out_paragraph_vertical_line_interval_index;
+                        if (condition_1 && (condition_2 || condition_3)) {
                             // (!overlap_y(out_paragraph.bb, symbol_bb) ||
                             // ((symbol_bb.min.x - out_paragraph.bb.max.x) > symbol_bb.width()))) {
                             // Prepare to start a new paragraph.
@@ -283,6 +436,22 @@ ParagraphGroup read_paragraphs(const nlohmann::json& vision_result,
 
                             // Reset the current paragraph to serve as a new paragraph.
                             out_paragraph.reset();
+
+                            // If the condition 2 is satisfied, get the vertical
+                            // line bounding boxes by the current symbol.
+                            if (condition_2) {
+                                y_overlapping_vertical_line_bbs =
+                                    get_y_overlapping_vertical_line_bbs(
+                                        vertical_line_bbs, symbol_bb);
+                            }
+
+                            // If the condition 3 is satisfied, use the current
+                            // symbol's vertical line interval index as the next
+                            // paragraph's.
+                            if (condition_3) {
+                                out_paragraph_vertical_line_interval_index =
+                                    symbol_vertical_line_interval_index;
+                            }
                         }
 
                         // Collect text.
@@ -368,30 +537,21 @@ void show_image(const std::string& filename, const ParagraphGroup& paragraph_gro
 }
 
 int main(int argc, char** argv) {
-
-    // // Test
-    // Vector2 a(2, 2);
-    // Vector2 b(4, -4);
-    // auto c = a + b;
-    // auto d = a * 0.5f;
-    // auto e = 1.5f * b;
-    // std::cout << "c: (" << c.x << ", " << c.y << ")\n";
-    // std::cout << "d: (" << d.x << ", " << d.y << ")\n";
-    // std::cout << "e: (" << e.x << ", " << e.y << ")\n";
-
     // Parse input argument.
     std::string image_filename;
     std::string json_filename;
     bool row_range_is_specified_by_input = false;
     int input_row_begin_index = 0;
     int input_row_end_index = 0;
-    if (argc == 2) {
-        json_filename = argv[1];
-    } else if (argc == 4) {
-        json_filename = argv[1];
+    if (argc == 3) {
+        image_filename = argv[1];
+        json_filename = argv[2];
+    } else if (argc == 5) {
+        image_filename = argv[1];
+        json_filename = argv[2];
         row_range_is_specified_by_input = true;
-        input_row_begin_index = std::atoi(argv[2]);
-        input_row_end_index = std::atoi(argv[3]);
+        input_row_begin_index = std::atoi(argv[3]);
+        input_row_end_index = std::atoi(argv[4]);
         if (input_row_begin_index < 0 || input_row_end_index < 0 ||
             input_row_begin_index > input_row_end_index) {
             std::cout << "Invalid input indices\n";
@@ -402,6 +562,21 @@ int main(int argc, char** argv) {
         return 0;
     }
 
+    auto vertical_line_bbs = detect_vertical_lines(image_filename);
+
+    // // Test
+    // std::cout << vertical_line_bbs.size() << "\n";
+    // BoundingBox bb;
+    // bb.grow(Vector2(1100, 1000));
+    // bb.grow(Vector2(1101, 1001));
+    // auto y_overlapping_vertical_line_bbs = get_y_overlapping_vertical_line_bbs(
+    //     vertical_line_bbs, bb);
+    // std::cout << y_overlapping_vertical_line_bbs.size() << "\n";
+    // auto index = get_vertical_line_interval_index(vertical_line_bbs, bb);
+    // std::cout << index << "\n";
+    // index = get_vertical_line_interval_index(y_overlapping_vertical_line_bbs, bb);
+    // std::cout << index << "\n";
+    // return 0;
 
     std::ifstream json_file(json_filename);
     nlohmann::json vision_result;
@@ -410,7 +585,7 @@ int main(int argc, char** argv) {
     // std::cout << "json_file.size(): " << vision_result.size() << "\n";
     // std::cout << vision_result["fullTextAnnotation"]["text"] << "\n";
 
-    auto paragraph_group = read_paragraphs(vision_result, image_filename);
+    auto paragraph_group = read_paragraphs(vision_result, image_filename, vertical_line_bbs);
 
     // std::cout << "read paragraphs:\n";
     // print(paragraph_group);
