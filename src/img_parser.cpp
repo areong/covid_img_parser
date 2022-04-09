@@ -236,7 +236,7 @@ std::vector<BoundingBox> detect_vertical_lines(const std::string& image_filename
 
     // Detect vertical line pixels.
     cv::Mat vertical_structure = cv::getStructuringElement(cv::MorphShapes::MORPH_RECT,
-        cv::Size(1, edge_image.rows / 40));
+        cv::Size(1, edge_image.rows / 30));
     cv::erode(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
     cv::dilate(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
 
@@ -536,31 +536,48 @@ void show_image(const std::string& filename, const ParagraphGroup& paragraph_gro
     cv::waitKey(0);
 }
 
+void show_image(const std::string& filename, const std::vector<ParagraphGroup>& paragraph_groups) {
+    cv::Mat image = cv::imread(filename);
+
+    // Draw bounding box of paragraphs.
+    int row_index = 0;
+    for (auto&& paragraph_group : paragraph_groups) {
+        auto& min = paragraph_group.get_bb().min;
+        auto& max = paragraph_group.get_bb().max;
+        auto color = cv::Scalar(0, 100, 0);
+        int thickness = 2;
+        cv::rectangle(image, cv::Point(min.x, min.y), cv::Point(max.x, max.y),
+            color, thickness);
+        // Put text.
+        auto font_scale = 1.0;
+        cv::putText(image, std::to_string(row_index), cv::Point(min.x, min.y),
+            cv::HersheyFonts::FONT_HERSHEY_SIMPLEX, font_scale, color, thickness);
+
+        ++row_index;
+    }
+
+    // Resize image.
+    if (image.rows > 1000) {
+        auto ratio = 1000.0f / image.rows;
+        cv::resize(image, image, cv::Size(ratio * image.cols, ratio * image.rows));
+    }
+
+    cv::imshow("image", image);
+    cv::waitKey(0);
+}
+
 int main(int argc, char** argv) {
     // Parse input argument.
     std::string image_filename;
-    std::string json_filename;
-    bool row_range_is_specified_by_input = false;
-    int input_row_begin_index = 0;
-    int input_row_end_index = 0;
-    if (argc == 3) {
+    if (argc == 2) {
         image_filename = argv[1];
-        json_filename = argv[2];
-    } else if (argc == 5) {
-        image_filename = argv[1];
-        json_filename = argv[2];
-        row_range_is_specified_by_input = true;
-        input_row_begin_index = std::atoi(argv[3]);
-        input_row_end_index = std::atoi(argv[4]);
-        if (input_row_begin_index < 0 || input_row_end_index < 0 ||
-            input_row_begin_index > input_row_end_index) {
-            std::cout << "Invalid input indices\n";
-            return 0;
-        }
     } else {
         std::cout << "Invalid input\n";
         return 0;
     }
+
+    // Convert image filename to json filename by replacing the extension name.
+    auto json_filename = image_filename.substr(0, image_filename.find_last_of(".")) + ".json";
 
     auto vertical_line_bbs = detect_vertical_lines(image_filename);
 
@@ -600,11 +617,31 @@ int main(int argc, char** argv) {
     // Split into rows.
     auto paragraph_rows = split(paragraph_group, false);
 
-    std::cout << "\nRow count: " << paragraph_rows.size() << "\n\n";
-    for (int i = 0; i < paragraph_rows.size(); ++i) {
-        std::cout << "Row " << i << ":\n\n";
-        print(paragraph_rows[i]);
-        std::cout << "\n";
+    // std::cout << "\nRow count: " << paragraph_rows.size() << "\n\n";
+    // for (int i = 0; i < paragraph_rows.size(); ++i) {
+    //     std::cout << "Row " << i << ":\n\n";
+    //     print(paragraph_rows[i]);
+    //     std::cout << "\n";
+    // }
+
+    // Show images with rows labelled.
+    show_image(image_filename, paragraph_rows);
+
+    // Let user input row range.
+    bool row_range_is_specified_by_input = false;
+    int input_row_begin_index = 0;
+    int input_row_end_index = 0;
+    std::cout << "Please input row begin index: ";
+    std::cin >> input_row_begin_index;
+    std::cout << "Please input row end index: ";
+    std::cin >> input_row_end_index;
+    // Check input valid or not.
+    if (input_row_begin_index < 0 || input_row_end_index < 0 ||
+        input_row_begin_index > input_row_end_index) {
+        std::cout << "Invalid input indices. Will find row range automatically.\n";
+        row_range_is_specified_by_input = false;
+    } else {
+        row_range_is_specified_by_input = true;
     }
 
     // Find a subset of rows with the largest column count.
@@ -710,11 +747,10 @@ int main(int argc, char** argv) {
         }
 
         // Print columns.
-        std::cout << "\nColumn count: " << paragraph_columns.size() << "\n\n";
+        // std::cout << "\nColumn count: " << paragraph_columns.size() << "\n\n";
         for (int i = 0; i < paragraph_columns.size(); ++i) {
-            std::cout << "Column " << i << ":\n\n";
-            print(paragraph_columns[i]);
             std::cout << "\n";
+            print(paragraph_columns[i]);
         }
     }
 
