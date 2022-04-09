@@ -236,7 +236,7 @@ std::vector<BoundingBox> detect_vertical_lines(const std::string& image_filename
 
     // Detect vertical line pixels.
     cv::Mat vertical_structure = cv::getStructuringElement(cv::MorphShapes::MORPH_RECT,
-        cv::Size(1, edge_image.rows / 30));
+        cv::Size(1, 0.03 * edge_image.rows));
     cv::erode(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
     cv::dilate(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
 
@@ -255,7 +255,6 @@ std::vector<BoundingBox> detect_vertical_lines(const std::string& image_filename
     // Label pixels of vertical lines by finding connected components.
     cv::Mat labelled_image(edge_image.size(), CV_32S);
     int label_count = cv::connectedComponents(edge_image, labelled_image, 8);
-    std::cout << "label_count: " << label_count << "\n";
 
     if (label_count <= 1) {
         // There is only one label, the background label. No line is found.
@@ -631,14 +630,15 @@ int main(int argc, char** argv) {
     bool row_range_is_specified_by_input = false;
     int input_row_begin_index = 0;
     int input_row_end_index = 0;
-    std::cout << "Please input row begin index: ";
+    std::cout << "請輸入起始列 (Please input row begin index): ";
     std::cin >> input_row_begin_index;
-    std::cout << "Please input row end index: ";
+    std::cout << "請輸入結束列 (Please input row end index): ";
     std::cin >> input_row_end_index;
     // Check input valid or not.
     if (input_row_begin_index < 0 || input_row_end_index < 0 ||
         input_row_begin_index > input_row_end_index) {
-        std::cout << "Invalid input indices. Will find row range automatically.\n";
+        std::cout << "輸入範圍無效, 嘗試自動尋找最佳範圍. "
+                  << "(Invalid input indices. Will find row range automatically.)\n";
         row_range_is_specified_by_input = false;
     } else {
         row_range_is_specified_by_input = true;
@@ -731,7 +731,8 @@ int main(int argc, char** argv) {
             best_row_end_index = input_row_end_index;
         }
 
-        std::cout << "Split rows in range [" << best_row_begin_index << ", " << best_row_end_index << ") into columns.\n";
+        std::cout << "將範圍 [" << best_row_begin_index << ", " << best_row_end_index << ") 內的列分割為行: "
+                  << "(Split rows in range [" << best_row_begin_index << ", " << best_row_end_index << ") into columns:)\n";
 
         // Merge rows between the begin and end indices.
         auto merged_group = merge(paragraph_rows, best_row_begin_index, best_row_end_index);
