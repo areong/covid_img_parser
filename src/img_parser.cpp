@@ -9,6 +9,55 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
+struct Setting {
+    /**
+     * The minimum length for a vertical line to be detected.
+     * The unit is the height of the program input image.
+     * Recommended values: 0.03 - 0.04
+     */
+    float vertical_line_length_threshold = 0.04;
+    /**
+     * The maximum height of the input image when displayed in GUI.
+     */
+    int image_display_max_height = 800;
+};
+
+Setting read_settings(const std::string& filename) {
+    std::cout << "讀取設定檔 (Read settings): " << filename << "\n";
+    std::ifstream settings_file(filename);
+    if (!settings_file.is_open()) {
+        std::cout << "無法開啟設定檔 (Cannot open settings file): " << filename << "\n"
+                  << "使用預設設定值 (Use default settings.)\n";
+        return Setting();
+    }
+
+    nlohmann::json settings_json;
+    settings_file >> settings_json;
+
+    Setting setting;
+
+    // Read vertical line length threshold.
+    setting.vertical_line_length_threshold = settings_json["vertical_line_length_threshold"];
+    if (setting.vertical_line_length_threshold <= 0) {
+        std::cout << "  設定值 vertical line length threshold 無效, 改設為0.04\n"
+                  << "  (Invalid value for vertical line length threshold. Set to 0.04)\n";
+        setting.vertical_line_length_threshold = 0.04;
+    } else {
+        std::cout << "  vertical line length threshold: " << setting.vertical_line_length_threshold << "\n";
+    }
+
+    setting.image_display_max_height = settings_json["image_display_max_height"];
+    if (setting.image_display_max_height <= 0) {
+        std::cout << "  設定值 image display max height 無效, 改設為800\n"
+                  << "  (Invalid value for image display max height. Set to 800)\n";
+        setting.vertical_line_length_threshold = 800;
+    } else {
+        std::cout << "  image display max height: " << setting.image_display_max_height << "\n";
+    }
+    
+    return setting;
+}
+
 struct Vector2 {
     Vector2(int x, int y): x(x), y(y) {}
     int x;
@@ -221,7 +270,8 @@ ParagraphGroup merge(const std::vector<ParagraphGroup>& in_groups,
     return out_group;
 }
 
-std::vector<BoundingBox> detect_vertical_lines(const std::string& image_filename) {
+std::vector<BoundingBox> detect_vertical_lines(const std::string& image_filename,
+    const Setting& setting) {
     // Open the image file.
     cv::Mat image = cv::imread(image_filename);
 
@@ -236,7 +286,7 @@ std::vector<BoundingBox> detect_vertical_lines(const std::string& image_filename
 
     // Detect vertical line pixels.
     cv::Mat vertical_structure = cv::getStructuringElement(cv::MorphShapes::MORPH_RECT,
-        cv::Size(1, 0.03 * edge_image.rows));
+        cv::Size(1, setting.vertical_line_length_threshold * edge_image.rows));
     cv::erode(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
     cv::dilate(edge_image, edge_image, vertical_structure, cv::Point(-1, -1));
 
@@ -329,7 +379,7 @@ ParagraphGroup read_paragraphs(const nlohmann::json& vision_result,
     const std::string& image_filename,
     const std::vector<BoundingBox>& vertical_line_bbs) {
 
-    cv::Mat image = cv::imread(image_filename);
+    // cv::Mat image = cv::imread(image_filename);
     // // Draw bounding box of paragraphs.
     // for (auto&& paragraph : paragraph_group.get_paragraphs()) {
     //     auto& min = paragraph.bb.min;
@@ -521,7 +571,8 @@ void print(const ParagraphGroup& group) {
     }
 }
 
-void show_image(const std::string& filename, const ParagraphGroup& paragraph_group) {
+void show_image(const std::string& filename, const ParagraphGroup& paragraph_group,
+    const Setting& setting) {
     cv::Mat image = cv::imread(filename);
 
     // Draw bounding box of paragraphs.
@@ -531,11 +582,18 @@ void show_image(const std::string& filename, const ParagraphGroup& paragraph_gro
         cv::rectangle(image, cv::Point(min.x, min.y), cv::Point(max.x, max.y), cv::Scalar(0, 100, 0));
     }
 
+    // Resize image.
+    if (image.rows > setting.image_display_max_height) {
+        auto ratio = (float) setting.image_display_max_height / image.rows;
+        cv::resize(image, image, cv::Size(ratio * image.cols, ratio * image.rows));
+    }
+
     cv::imshow("image", image);
     cv::waitKey(0);
 }
 
-void show_image(const std::string& filename, const std::vector<ParagraphGroup>& paragraph_groups) {
+void show_image(const std::string& filename, const std::vector<ParagraphGroup>& paragraph_groups,
+    const Setting& setting) {
     cv::Mat image = cv::imread(filename);
 
     // Draw bounding box of paragraphs.
@@ -556,8 +614,8 @@ void show_image(const std::string& filename, const std::vector<ParagraphGroup>& 
     }
 
     // Resize image.
-    if (image.rows > 1000) {
-        auto ratio = 1000.0f / image.rows;
+    if (image.rows > setting.image_display_max_height) {
+        auto ratio = (float) setting.image_display_max_height / image.rows;
         cv::resize(image, image, cv::Size(ratio * image.cols, ratio * image.rows));
     }
 
@@ -571,14 +629,17 @@ int main(int argc, char** argv) {
     if (argc == 2) {
         image_filename = argv[1];
     } else {
-        std::cout << "Invalid input\n";
-        return 0;
+        std::cout << "輸入參數無效 (Invalid input). 用法 (Usage): img_parser <image_filename>\n";
+        return -1;
     }
+
+    // Read settings.json, which is assumed to be located in the working directory.
+    const auto setting = read_settings("./settings.json");
 
     // Convert image filename to json filename by replacing the extension name.
     auto json_filename = image_filename.substr(0, image_filename.find_last_of(".")) + ".json";
 
-    auto vertical_line_bbs = detect_vertical_lines(image_filename);
+    auto vertical_line_bbs = detect_vertical_lines(image_filename, setting);
 
     // // Test
     // std::cout << vertical_line_bbs.size() << "\n";
@@ -595,6 +656,10 @@ int main(int argc, char** argv) {
     // return 0;
 
     std::ifstream json_file(json_filename);
+    if (!json_file.is_open()) {
+        std::cout << "無法開啟json檔 (Cannot open json file): " << json_filename << "\n";
+        return -1;
+    }
     nlohmann::json vision_result;
     json_file >> vision_result;
 
@@ -624,7 +689,7 @@ int main(int argc, char** argv) {
     // }
 
     // Show images with rows labelled.
-    show_image(image_filename, paragraph_rows);
+    show_image(image_filename, paragraph_rows, setting);
 
     // Let user input row range.
     bool row_range_is_specified_by_input = false;
@@ -731,8 +796,8 @@ int main(int argc, char** argv) {
             best_row_end_index = input_row_end_index;
         }
 
-        std::cout << "將範圍 [" << best_row_begin_index << ", " << best_row_end_index << ") 內的列分割為行: "
-                  << "(Split rows in range [" << best_row_begin_index << ", " << best_row_end_index << ") into columns:)\n";
+        std::cout << "將範圍 [" << best_row_begin_index << ", " << best_row_end_index << ") 內的列分割為行 "
+                  << "(Split rows in range [" << best_row_begin_index << ", " << best_row_end_index << ") into columns):\n";
 
         // Merge rows between the begin and end indices.
         auto merged_group = merge(paragraph_rows, best_row_begin_index, best_row_end_index);
@@ -772,7 +837,7 @@ int main(int argc, char** argv) {
 
     // Find the row containing "data", "time", or "location" (in Chinese).
 
-    // show_image(image_filename, paragraph_group);
+    // show_image(image_filename, paragraph_group, setting);
 
     return 0;
 }
