@@ -557,10 +557,88 @@ ParagraphGroup read_paragraphs(const nlohmann::json& vision_result,
     return out_group;
 }
 
-// Split into y-non-overlapping rows.
-std::vector<std::vector<Paragraph>> split_paragraphs_into_rows() {
-    std::vector<std::vector<Paragraph>> rows;
-    return rows;
+/**
+ * Find the best row range that maximizes the column count.
+ * @param paragraph_rows assumed sorted by min y.
+ * @return a pair, {row_begin_index, row_end_index}
+ */
+std::pair<int, int> find_best_row_range(const std::vector<ParagraphGroup>& paragraph_rows) {
+    // Find a subset of rows with the largest column count.
+    // Two variables, row_begin_index and row_end_index.
+    // row_begin_index range: [0, total_row_count)
+    // row_end_index range: [row_begin_index + 1, total_row_count]
+    const auto total_row_count = paragraph_rows.size();
+    std::vector<std::vector<int>> column_count_table(total_row_count,
+        std::vector<int>(total_row_count + 1, 0));
+    
+    // Calculate column count for each begin, end pair in the table.
+    // Also record the maximum column count.
+    int max_column_count = 0;
+    for (int row_begin_index = 0; row_begin_index < total_row_count; ++row_begin_index) {
+        for (int row_end_index = row_begin_index + 1; row_end_index < total_row_count + 1; ++row_end_index) {
+            // Merge rows between the begin and end indices.
+            auto merged_group = merge(paragraph_rows, row_begin_index, row_end_index);
+
+            // Split the merged group into columns.
+            auto paragraph_columns = split(merged_group, true);
+
+            // Record the column count.
+            auto column_count = paragraph_columns.size();
+            column_count_table[row_begin_index][row_end_index] = column_count;
+            // // Print the result.
+            // std::cout << "(" << row_begin_index << ", " << row_end_index << "): "
+            //     << column_count_table[row_begin_index][row_end_index] << "\n";
+
+            // Update the maximum column count.
+            if (column_count > max_column_count) {
+                max_column_count = column_count;
+            }
+        }
+    }
+
+    // In the index pairs with the maximum column count, find the pair with
+    // the smallest row_begin_index and the largest row_end_index, and
+    // with the most rows.
+    // Method: iterate the begin index ascendingly, and the end index descendingly,
+    // and stop at the first element with the maximum column count.
+    // std::cout << "total_row_count: " << total_row_count << "\n";
+    // std::cout << "max_column_count: " << max_column_count << "\n";
+    // int best_row_begin_index = 0;
+    // int best_row_end_index = total_row_count;
+    std::vector<std::pair<int, int>> row_range_candidates;
+    // bool best_is_found = false;
+    for (int row_begin_index = 0; row_begin_index < total_row_count; ++row_begin_index) {
+        for (int row_end_index = total_row_count; row_end_index > row_begin_index; --row_end_index) {
+            // std::cout << "(" << row_begin_index << ", " << row_end_index << "): "
+            //     << column_count_table[row_begin_index][row_end_index] << "\n";
+            if (column_count_table[row_begin_index][row_end_index] == max_column_count) {
+                // Collect the row range as a candidate.
+                row_range_candidates.push_back(std::make_pair(row_begin_index, row_end_index));
+
+                // best_row_begin_index = row_begin_index;
+                // best_row_end_index = row_end_index;
+                // best_is_found = true;
+                // break;
+            }
+        }
+
+        // if (best_is_found) break;
+    }
+    // std::cout << "best: (" << best_row_begin_index << ", " << best_row_end_index << ")\n";
+
+    // Sort candidates by row count.
+    std::sort(row_range_candidates.begin(), row_range_candidates.end(),
+        [](const std::pair<int, int>& a, const std::pair<int, int>& b){
+            return (a.second - a.first) < (b.second - b.first);
+        });
+
+    // // Print candidates.
+    // std::cout << "row range candidates:\n";
+    // for (auto&& range : row_range_candidates) {
+    //     std::cout << "(" << range.first << ", " << range.second << ")\n";
+    // }
+
+    return row_range_candidates.back();
 }
 
 void print(const ParagraphGroup& group) {
@@ -700,124 +778,51 @@ int main(int argc, char** argv) {
     std::cout << "請輸入結束列 (Please input row end index): ";
     std::cin >> input_row_end_index;
     // Check input valid or not.
-    if (input_row_begin_index < 0 || input_row_end_index < 0 ||
-        input_row_begin_index > input_row_end_index) {
-        std::cout << "輸入範圍無效, 嘗試自動尋找最佳範圍. "
-                  << "(Invalid input indices. Will find row range automatically.)\n";
+    if (input_row_begin_index < 0 || input_row_end_index < 1 ||
+        input_row_begin_index >= paragraph_rows.size() || input_row_end_index > paragraph_rows.size() ||
+        input_row_begin_index >= input_row_end_index) {
+        std::cout << "輸入範圍無效, 嘗試自動尋找最佳範圍 "
+                  << "(Invalid input indices. Try to find the best row range.)\n";
         row_range_is_specified_by_input = false;
     } else {
         row_range_is_specified_by_input = true;
     }
 
-    // Find a subset of rows with the largest column count.
-    // Two variables, row_begin_index and row_end_index.
-    // row_begin_index range: [0, total_row_count)
-    // row_end_index range: [row_begin_index + 1, total_row_count]
-    const auto total_row_count = paragraph_rows.size();
-    std::vector<std::vector<int>> column_count_table(total_row_count,
-        std::vector<int>(total_row_count + 1, 0));
-    
-    // Calculate column count for each begin, end pair in the table.
-    // Also record the maximum column count.
-    int max_column_count = 0;
-    for (int row_begin_index = 0; row_begin_index < total_row_count; ++row_begin_index) {
-        for (int row_end_index = row_begin_index + 1; row_end_index < total_row_count + 1; ++row_end_index) {
-            // Merge rows between the begin and end indices.
-            auto merged_group = merge(paragraph_rows, row_begin_index, row_end_index);
-
-            // Split the merged group into columns.
-            auto paragraph_columns = split(merged_group, true);
-
-            // Record the column count.
-            auto column_count = paragraph_columns.size();
-            column_count_table[row_begin_index][row_end_index] = column_count;
-            // // Print the result.
-            // std::cout << "(" << row_begin_index << ", " << row_end_index << "): "
-            //     << column_count_table[row_begin_index][row_end_index] << "\n";
-
-            // Update the maximum column count.
-            if (column_count > max_column_count) {
-                max_column_count = column_count;
-            }
-        }
+    // Determine the row range to use.
+    int row_begin_index, row_end_index;
+    if (row_range_is_specified_by_input) {
+        // The row range is specified by user input.
+        row_begin_index = input_row_begin_index;
+        row_end_index = input_row_end_index;
+    } else {
+        // The row range is not specified by user input.
+        // Find best row range that maximizes the column count.
+        auto best_row_range = find_best_row_range(paragraph_rows);
+        row_begin_index = best_row_range.first;
+        row_end_index = best_row_range.second;
     }
 
-    // In the index pairs with the maximum column count, find the pair with
-    // the smallest row_begin_index and the largest row_end_index, and
-    // with the most rows.
-    // Method: iterate the begin index ascendingly, and the end index descendingly,
-    // and stop at the first element with the maximum column count.
-    // std::cout << "total_row_count: " << total_row_count << "\n";
-    // std::cout << "max_column_count: " << max_column_count << "\n";
-    // int best_row_begin_index = 0;
-    // int best_row_end_index = total_row_count;
-    std::vector<std::pair<int, int>> row_range_candidates;
-    // bool best_is_found = false;
-    for (int row_begin_index = 0; row_begin_index < total_row_count; ++row_begin_index) {
-        for (int row_end_index = total_row_count; row_end_index > row_begin_index; --row_end_index) {
-            // std::cout << "(" << row_begin_index << ", " << row_end_index << "): "
-            //     << column_count_table[row_begin_index][row_end_index] << "\n";
-            if (column_count_table[row_begin_index][row_end_index] == max_column_count) {
-                // Collect the row range as a candidate.
-                row_range_candidates.push_back(std::make_pair(row_begin_index, row_end_index));
+    std::cout << "將範圍 [" << row_begin_index << ", " << row_end_index << ") 內的列分割為行 "
+                << "(Split rows in range [" << row_begin_index << ", " << row_end_index << ") into columns):\n";
 
-                // best_row_begin_index = row_begin_index;
-                // best_row_end_index = row_end_index;
-                // best_is_found = true;
-                // break;
-            }
-        }
+    // Merge rows between the begin and end indices.
+    auto merged_group = merge(paragraph_rows, row_begin_index, row_end_index);
+    // std::cout << "merged_group size: " << merged_group.get_paragraphs().size() << "\n";
 
-        // if (best_is_found) break;
+    // Split the merged group into columns.
+    auto paragraph_columns = split(merged_group, true);
+    // std::cout << "column count: " << paragraph_columns.size() << "\n";
+
+    // Sort each column by y.
+    for (auto&& column : paragraph_columns) {
+        column.sort(false);
     }
-    // std::cout << "best: (" << best_row_begin_index << ", " << best_row_end_index << ")\n";
 
-    // Sort candidates by row count.
-    std::sort(row_range_candidates.begin(), row_range_candidates.end(),
-        [](const std::pair<int, int>& a, const std::pair<int, int>& b){
-            return (a.second - a.first) < (b.second - b.first);
-        });
-
-    // // Print candidates.
-    // std::cout << "row range candidates:\n";
-    // for (auto&& range : row_range_candidates) {
-    //     std::cout << "(" << range.first << ", " << range.second << ")\n";
-    // }
-
-    // Extract best columns.
-    {
-        auto best_row_range = row_range_candidates.back();
-        int best_row_begin_index = best_row_range.first;
-        int best_row_end_index = best_row_range.second;
-
-        // If the input specifies the row range, overwrite the range here.
-        if (row_range_is_specified_by_input) {
-            best_row_begin_index = input_row_begin_index;
-            best_row_end_index = input_row_end_index;
-        }
-
-        std::cout << "將範圍 [" << best_row_begin_index << ", " << best_row_end_index << ") 內的列分割為行 "
-                  << "(Split rows in range [" << best_row_begin_index << ", " << best_row_end_index << ") into columns):\n";
-
-        // Merge rows between the begin and end indices.
-        auto merged_group = merge(paragraph_rows, best_row_begin_index, best_row_end_index);
-        // std::cout << "merged_group size: " << merged_group.get_paragraphs().size() << "\n";
-
-        // Split the merged group into columns.
-        auto paragraph_columns = split(merged_group, true);
-        // std::cout << "column count: " << paragraph_columns.size() << "\n";
-
-        // Sort each column by y.
-        for (auto&& column : paragraph_columns) {
-            column.sort(false);
-        }
-
-        // Print columns.
-        // std::cout << "\nColumn count: " << paragraph_columns.size() << "\n\n";
-        for (int i = 0; i < paragraph_columns.size(); ++i) {
-            std::cout << "\n";
-            print(paragraph_columns[i]);
-        }
+    // Print columns.
+    // std::cout << "\nColumn count: " << paragraph_columns.size() << "\n\n";
+    for (int i = 0; i < paragraph_columns.size(); ++i) {
+        std::cout << "\n";
+        print(paragraph_columns[i]);
     }
 
     // // Find the row of column titles.
